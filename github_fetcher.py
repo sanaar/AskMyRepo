@@ -41,8 +41,20 @@ def _headers():
     return headers
 
 
+def _get(url: str, params: dict | None = None):
+    """GET with the configured token, falling back to an unauthenticated
+    request if the token is missing, expired, or otherwise rejected (401).
+    """
+    headers = _headers()
+    resp = requests.get(url, params=params, headers=headers, timeout=15)
+    if resp.status_code == 401 and "Authorization" in headers:
+        headers = {k: v for k, v in headers.items() if k != "Authorization"}
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+    return resp
+
+
 def get_default_branch(owner: str, repo: str) -> str:
-    resp = requests.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=_headers(), timeout=15)
+    resp = _get(f"{GITHUB_API}/repos/{owner}/{repo}")
     if resp.status_code == 404:
         raise GitHubFetchError(f"Repo {owner}/{repo} not found (private repos aren't supported).")
     resp.raise_for_status()
@@ -67,11 +79,9 @@ def fetch_repo(url: str) -> dict:
     owner, repo = parse_github_url(url)
     branch = get_default_branch(owner, repo)
 
-    tree_resp = requests.get(
+    tree_resp = _get(
         f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{branch}",
         params={"recursive": "1"},
-        headers=_headers(),
-        timeout=15,
     )
     tree_resp.raise_for_status()
     tree = tree_resp.json().get("tree", [])
@@ -94,11 +104,9 @@ def fetch_repo(url: str) -> dict:
 
 
 def _fetch_file_content(owner: str, repo: str, path: str, branch: str):
-    resp = requests.get(
+    resp = _get(
         f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
         params={"ref": branch},
-        headers=_headers(),
-        timeout=15,
     )
     if resp.status_code != 200:
         return None
