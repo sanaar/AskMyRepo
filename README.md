@@ -1,68 +1,76 @@
 # AskMyRepo
 
-Paste a public GitHub repo URL, ask questions about it, get answers grounded in the actual code and docs.
+AskMyRepo lets you paste a link to any public GitHub repository and ask it questions in plain English, like you would ask a teammate who already read the whole codebase.
+
+Instead of clicking through folders and files trying to piece together how a project works, you type something like "how does authentication work here?" or "what does the `parse_config` function do?" and get an answer that points back to the actual files it came from. Under the hood, the app reads the repo's README and source files, breaks them into meaningful chunks, and uses an AI model to answer your question using only what it found in that specific repo, not general guesses.
 
 **Live demo:** [askmyrepo-nre8uscmfoadq7sfwn6eyh.streamlit.app](https://askmyrepo-nre8uscmfoadq7sfwn6eyh.streamlit.app/)
 
 ## How it works
 
-```
-GitHub URL -> fetch (README, file tree, source files)
-           -> chunk (paragraphs for docs, function/class blocks for code)
-           -> embed (sentence-transformers, local)
-           -> store (ChromaDB, cached per repo)
-           -> retrieve top-k chunks for a question
-           -> answer (Groq / Llama 3.1), with source files shown
-```
+1. You paste a GitHub URL.
+2. The app fetches the repo's README, file list, and source files using the GitHub API.
+3. It splits the docs into paragraphs and the code into whole functions and classes, so nothing gets cut in half.
+4. Each chunk is turned into an embedding (a numeric representation of its meaning) and saved in a small local database called ChromaDB, so the same repo does not need to be reprocessed every time.
+5. When you ask a question, the app finds the chunks that are most related to it and sends them, along with your question, to an AI model (Llama 3.1, through Groq) to write the answer.
+6. The answer is shown along with the file paths it was based on, so you can double check the source yourself.
 
-## Tech stack
+## What it's built with
 
-- **GitHub REST API** — fetch repo metadata, file tree, README, and source files (no auth needed for public repos; an optional token raises the rate limit)
-- **[`sentence-transformers`](https://www.sbert.net/)** (`all-MiniLM-L6-v2`) — local, free embeddings
-- **[ChromaDB](https://www.trychroma.com/)** — vector storage, one persisted collection per repo
-- **[Groq](https://groq.com/) / Llama 3.1** — free-tier LLM inference for the final answer
-- **Streamlit** — UI and free hosting (Streamlit Community Cloud)
+- **GitHub REST API** to fetch repo metadata, the file tree, the README, and source files. Public repos work without any login, and adding a personal access token just raises how many requests you can make per hour.
+- **sentence-transformers** (the `all-MiniLM-L6-v2` model) to turn text into embeddings. This runs locally and is free.
+- **ChromaDB** to store those embeddings, with one saved collection per repo so repeat visits are fast.
+- **Groq**, running Llama 3.1, to generate the actual answers. Groq has a free tier that's plenty for a project like this.
+- **Streamlit** for the web interface and free hosting on Streamlit Community Cloud.
 
-## Design decision: chunking code differently than docs
+## Why code is chunked differently than docs
 
-Docs get split by paragraph — that's the natural unit of a README. Code gets
-split so each chunk is a whole function or class body (via a regex heuristic
-in [`chunker.py`](chunker.py)), never cut in half mid-definition. Slicing code
-by a fixed line count is the easy path, but it routinely splits a function
-across two chunks, so the retriever ends up handing the model half a function
-with no signature, or a signature with no body.
+A README reads naturally paragraph by paragraph, so that's how it's split. Code is different. If you split code by a fixed number of lines, you'll eventually cut a function in half, so the AI ends up seeing a function's body with no signature, or a signature with nothing underneath it. To avoid that, `chunker.py` keeps each function or class together as one whole chunk.
+
+## Good questions to try
+
+Once a repo is indexed, here are a few kinds of questions that work well:
+
+- A general one, like "What does this project do?" or "How do I install this?"
+- Something about specific code, like "How does routing work?" or asking about a function you noticed in the file list.
+- A question the repo genuinely doesn't answer, just to check that the app says "I don't know" instead of making something up.
+
+You can also expand the "Sources" section under any answer to see exactly which files it used.
 
 ## Limitations
 
-- Only public repos (no auth flow for private repos).
-- Skips very large files (>100KB) and non-code/doc extensions (binaries,
-  lockfiles, images).
-- Uses GitHub's REST API without pagination beyond one page for the tree
-  listing, so extremely large monorepos may not be fully indexed.
-- Retrieval is a single embedding similarity search — no re-ranking or
-  hybrid (keyword + vector) search.
-- The ChromaDB cache lives on local disk, which is ephemeral on Streamlit
-  Community Cloud — it persists across questions in a running session, but
-  gets wiped whenever the app restarts (redeploys, wakes from sleep after
-  inactivity), so a previously-analyzed repo will re-index after that.
-- Unauthenticated GitHub API calls are capped at 60 requests/hour, which a
-  single medium-sized repo can exhaust — add a `GITHUB_TOKEN` to raise this
-  to 5,000/hour.
+- Only works with public repositories. There's no login flow for private repos.
+- Skips very large files (over 100KB) and file types other than code and docs, like images, lockfiles, and binaries.
+- Only reads one page of results from GitHub's file tree API, so extremely large repositories may not be fully indexed.
+- Uses a single similarity search to find relevant chunks. There's no more advanced re-ranking or keyword search layered on top yet.
+- The saved ChromaDB cache lives on disk, which is temporary on Streamlit Community Cloud. It speeds things up while the app is running, but gets cleared whenever the app restarts, so a repo you already analyzed may need to reindex after the app has been idle for a while.
+- Unauthenticated GitHub API requests are limited to 60 per hour, and a single medium sized repo can use that up quickly. Adding a `GITHUB_TOKEN` raises the limit to 5,000 per hour.
 
-## Running locally
+## Running it on your own computer
 
-```bash
-pip install -r requirements.txt
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# edit .streamlit/secrets.toml and add your Groq API key
-streamlit run app.py
-```
+1. Install the dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Copy the example secrets file and fill in your own key:
+   ```bash
+   cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+   ```
+   Then open `.streamlit/secrets.toml` and add your Groq API key. You can get a free one at [console.groq.com](https://console.groq.com).
+3. Start the app:
+   ```bash
+   streamlit run app.py
+   ```
 
-Get a free Groq API key at [console.groq.com](https://console.groq.com).
+## Deploying your own copy
 
-## Deploying
-
-Push this repo to GitHub, then deploy on
-[Streamlit Community Cloud](https://streamlit.io/cloud). Add `GROQ_API_KEY`
-(and optionally `GITHUB_TOKEN` for higher GitHub API rate limits) under the
-app's Secrets settings — never commit them to the repo.
+1. Push this repo to your own GitHub account.
+2. Go to [Streamlit Community Cloud](https://streamlit.io/cloud) and sign in with GitHub.
+3. Click "New app," then pick your repo, the `main` branch, and `app.py` as the entry point.
+4. Before deploying, open "Advanced settings" and add your secrets in this format:
+   ```toml
+   GROQ_API_KEY = "your-groq-api-key"
+   GITHUB_TOKEN = "your-github-token"
+   ```
+   The GitHub token is optional. Never commit these values directly into the repo.
+5. Click "Deploy" and wait a minute or two for the first build to finish.
